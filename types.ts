@@ -62,3 +62,64 @@ export interface AnalysisResult {
     chartData: ChartData | null;
     suggestedQuestions: string[];
 }
+
+// Prediction-related interfaces
+export interface TradeSetup {
+    symbol: string;
+    direction: 'long' | 'short';
+    entryPrice: number;
+    stopLoss?: number;
+    takeProfit?: number;
+    positionSize: number;
+    timeframe: string;
+    marketConditions?: {
+        weekly?: string;
+        daily?: string;
+    };
+    strategy?: string;
+    notes?: string;
+}
+
+// Template interface for standardized trade predictions
+export interface TradeTemplate {
+    id: string;
+    name: string;
+    description: string;
+    template: TradeSetup;
+    isDefault: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface PredictionResult {
+    id?: number;
+    fileId: string;
+    tradeSetup: TradeSetup;
+    successProbability: number; // 0-1
+    riskLevel: 'low' | 'medium' | 'high';
+    expectedReturn?: number;
+    suggestedPositionSize?: number;
+    confidenceScore: number; // 0-1
+    reasoning: string;
+    marketConditions?: any;
+    predictionDate?: string;
+}
+
+export interface PredictionVisualizationData {
+    probabilityDistribution: {
+        outcome: string;
+        probability: number;
+        color: string;
+    }[];
+    riskMetrics: {
+        metric: string;
+        value: number;
+        threshold: number;
+        status: 'good' | 'warning' | 'danger';
+    }[];
+    historicalComparison: {
+        similarTrades: number;
+        averageReturn: number;
+        successRate: number;
+    };
+}

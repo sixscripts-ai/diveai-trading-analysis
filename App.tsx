@@ -3,6 +3,7 @@ import { UploadedFile, ChatMessage, AnalysisResult } from './types';
 import Sidebar from './components/Sidebar';
 import FileUpload from './components/FileUpload';
 import ReportDisplay from './components/ReportDisplay';
+import PredictionsPage from './components/PredictionsPage';
 import { analyzeTradingData, continueChatStream } from './services/geminiService';
 import DatabaseClient from './services/databaseClient';
 import { AnalyticsIcon, BrainCircuitIcon, LogoIcon, UploadCloudIcon, HomeIcon } from './components/icons/Icons';
@@ -22,7 +23,7 @@ const App: React.FC = () => {
   const [dbClient] = useState(() => DatabaseClient.getInstance());
   const [isDbConnected, setIsDbConnected] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
-
+  const [currentPage, setCurrentPage] = useState<'main' | 'predictions'>('main');
 
   const [selectedFile, setSelectedFile] = useState<UploadedFile | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
@@ -306,11 +307,20 @@ const App: React.FC = () => {
   }, [selectedFile, analysisResult, isDbConnected, dbClient]);
 
   const handleReturnToMain = useCallback(() => {
+    setCurrentPage('main');
     setSelectedFile(null);
     setAnalysisResult(null);
     setError(null);
     setIsChatLoading(false);
     setIsLoading(false);
+  }, []);
+
+  const handleGoToPredictions = useCallback(() => {
+    setCurrentPage('predictions');
+  }, []);
+
+  const handleBackFromPredictions = useCallback(() => {
+    setCurrentPage('main');
   }, []);
   
   const renderMainContent = () => {
@@ -398,33 +408,54 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-transparent font-sans">
-      <Sidebar
-        files={files}
-        selectedFile={selectedFile}
-        onFileSelect={handleFileSelect}
-        onFileDelete={handleFileDelete}
-      />
-      <main className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 overflow-y-auto">
-        {/* Navigation Header */}
-        <div className="flex items-center justify-between mb-4 p-4 bg-gray-900/80 rounded-xl border border-gray-500/30 backdrop-blur-xl">
-          <div className="flex items-center space-x-3">
-            <LogoIcon className="h-8 w-8 text-cyan-400" />
-            <h1 className="text-xl font-bold text-gray-100">DeepDive AI</h1>
-          </div>
-          <button
-            onClick={handleReturnToMain}
-            className="flex items-center space-x-2 px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 rounded-lg transition-all duration-200 border border-cyan-500/30 hover:border-cyan-500/50"
-            title="Return to Home"
-          >
-            <HomeIcon className="h-5 w-5" />
-            <span className="font-medium">Home</span>
-          </button>
-        </div>
-        
-        <div className="flex-1 bg-gray-900/60 rounded-2xl border border-gray-500/20 shadow-2xl shadow-black/30 p-4 sm:p-6 lg:p-8 backdrop-blur-xl">
-            {renderMainContent()}
-        </div>
-      </main>
+      {currentPage === 'predictions' ? (
+        <PredictionsPage
+          files={files}
+          selectedFile={selectedFile}
+          onFileSelect={handleFileSelect}
+          onBack={handleBackFromPredictions}
+        />
+      ) : (
+        <>
+          <Sidebar
+            files={files}
+            selectedFile={selectedFile}
+            onFileSelect={handleFileSelect}
+            onFileDelete={handleFileDelete}
+          />
+          <main className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 overflow-y-auto">
+            {/* Navigation Header */}
+            <div className="flex items-center justify-between mb-4 p-4 bg-gray-900/80 rounded-xl border border-gray-500/30 backdrop-blur-xl">
+              <div className="flex items-center space-x-3">
+                <LogoIcon className="h-8 w-8 text-cyan-400" />
+                <h1 className="text-xl font-bold text-gray-100">DeepDive AI</h1>
+              </div>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={handleGoToPredictions}
+                  className="flex items-center space-x-2 px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 rounded-lg transition-all duration-200 border border-purple-500/30 hover:border-purple-500/50"
+                  title="AI Predictions"
+                >
+                  <BrainCircuitIcon className="h-5 w-5" />
+                  <span className="font-medium">Predictions</span>
+                </button>
+                <button
+                  onClick={handleReturnToMain}
+                  className="flex items-center space-x-2 px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 rounded-lg transition-all duration-200 border border-cyan-500/30 hover:border-cyan-500/50"
+                  title="Return to Home"
+                >
+                  <HomeIcon className="h-5 w-5" />
+                  <span className="font-medium">Home</span>
+                </button>
+              </div>
+            </div>
+            
+            <div className="flex-1 bg-gray-900/60 rounded-2xl border border-gray-500/20 shadow-2xl shadow-black/30 p-4 sm:p-6 lg:p-8 backdrop-blur-xl">
+                {renderMainContent()}
+            </div>
+          </main>
+        </>
+      )}
     </div>
   );
 };
