@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import type { UploadedFile, ChatMessage, AnalysisResult } from "../types";
+import type { UploadedFile, ChatMessage, AnalysisResult, TradeSetup, PredictionResult } from "../types";
 
 // Get API key but don't throw error immediately
 const API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
@@ -163,5 +163,135 @@ export const continueChatStream = async (
     } catch (error) {
         console.error("Error calling Gemini Chat API:", error);
         throw new Error("Failed to get chat response from AI service.");
+    }
+};
+
+// Enhanced Gemini AI Predictions
+const PREDICTION_PROMPT = `
+You are an expert trading prediction AI. Your name is 'DeepDive Predictor'. I will provide you with:
+1. Historical trading data from a user's trading journal
+2. A proposed trade setup
+
+Your task is to analyze the historical performance patterns and predict the outcome of the proposed trade.
+
+Your entire response MUST be a single JSON object with the following structure:
+{
+    "successProbability": number (0-1, probability of profitable trade),
+    "riskLevel": string ("low", "medium", or "high"),
+    "expectedReturn": number (estimated return percentage),
+    "suggestedPositionSize": number (recommended position size as percentage of account),
+    "confidenceScore": number (0-1, confidence in this prediction),
+    "reasoning": string (detailed explanation of the prediction),
+    "marketConditions": {
+        "sentiment": string,
+        "volatility": string,
+        "trend": string
+    },
+    "historicalComparison": {
+        "similarTrades": number,
+        "averageReturn": number,
+        "successRate": number
+    }
+}
+
+Base your prediction on:
+- Historical performance patterns from the trading data
+- Time of day/week performance
+- Instrument-specific performance
+- Similar trade setups in the past
+- Risk/reward ratios
+- Market conditions and trends
+
+Be brutally honest and data-driven. If the historical data suggests poor performance for similar setups, reflect that in your prediction.
+
+Historical Trading Data:
+---
+`;
+
+export const predictTradeOutcome = async (
+    file: UploadedFile,
+    tradeSetup: TradeSetup
+): Promise<PredictionResult> => {
+    try {
+        const tradeSetupText = `
+PROPOSED TRADE SETUP:
+- Symbol: ${tradeSetup.symbol}
+- Direction: ${tradeSetup.direction}
+- Entry Price: ${tradeSetup.entryPrice}
+- Stop Loss: ${tradeSetup.stopLoss || 'Not specified'}
+- Take Profit: ${tradeSetup.takeProfit || 'Not specified'}
+- Position Size: ${tradeSetup.positionSize}
+- Timeframe: ${tradeSetup.timeframe}
+- Market Conditions: ${tradeSetup.marketConditions || 'Not specified'}
+- Strategy: ${tradeSetup.strategy || 'Not specified'}
+- Notes: ${tradeSetup.notes || 'None'}
+        `;
+
+        let contents;
+        if (file.isBinary) {
+            contents = [
+                PREDICTION_PROMPT,
+                {
+                    inlineData: {
+                        mimeType: file.type,
+                        data: file.content,
+                    },
+                },
+                tradeSetupText
+            ];
+        } else {
+            contents = `${PREDICTION_PROMPT}\n${file.content}\n---\n${tradeSetupText}`;
+        }
+
+        const response = await getAIInstance().models.generateContent({
+            model: 'gemini-2.0-flash-001',
+            contents: contents,
+            config: {
+                responseMimeType: "application/json",
+            }
+        });
+
+        const rawText = response.text?.trim() || "";
+        
+        try {
+            const parsedJson = JSON.parse(rawText);
+            
+            // Validate required fields
+            const prediction: PredictionResult = {
+                fileId: file.id,
+                tradeSetup: tradeSetup,
+                successProbability: Math.max(0, Math.min(1, parsedJson.successProbability || 0.5)),
+                riskLevel: ['low', 'medium', 'high'].includes(parsedJson.riskLevel) ? parsedJson.riskLevel : 'medium',
+                expectedReturn: parsedJson.expectedReturn || 0,
+                suggestedPositionSize: parsedJson.suggestedPositionSize || tradeSetup.positionSize,
+                confidenceScore: Math.max(0, Math.min(1, parsedJson.confidenceScore || 0.5)),
+                reasoning: parsedJson.reasoning || 'No reasoning provided',
+                marketConditions: parsedJson.marketConditions || {},
+                predictionDate: new Date().toISOString()
+            };
+
+            return prediction;
+        } catch (jsonError) {
+            console.error("Failed to parse prediction JSON response:", jsonError);
+            console.log("Raw prediction response was:", rawText);
+            
+            // Fallback prediction
+            return {
+                fileId: file.id,
+                tradeSetup: tradeSetup,
+                successProbability: 0.5,
+                riskLevel: 'medium',
+                expectedReturn: 0,
+                suggestedPositionSize: tradeSetup.positionSize,
+                confidenceScore: 0.1,
+                reasoning: `AI prediction failed to parse. Raw response: ${rawText}`,
+                marketConditions: {},
+                predictionDate: new Date().toISOString()
+            };
+        }
+
+    } catch (error) {
+        console.error("Error calling Gemini Prediction API:", error);
+        throw new Error("Failed to get prediction from AI service.");
     }
 };

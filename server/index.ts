@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import DatabaseService from '../services/databaseService';
-import type { UploadedFile } from '../types';
+import type { UploadedFile, PredictionResult, TradeTemplate } from '../types';
 
 const app = express();
 const PORT = 3001;
@@ -188,6 +188,172 @@ app.delete('/api/chat/:fileId', (req, res) => {
     } catch (error) {
         console.error('Error deleting chat history:', error);
         res.status(500).json({ error: 'Failed to delete chat history' });
+    }
+});
+
+// Prediction endpoints
+app.get('/api/predictions', (_req, res) => {
+    try {
+        const predictions = db.getAllPredictions();
+        res.json(predictions);
+    } catch (error) {
+        console.error('Error getting predictions:', error);
+        res.status(500).json({ error: 'Failed to get predictions' });
+    }
+});
+
+app.get('/api/predictions/file/:fileId', (req, res) => {
+    try {
+        const predictions = db.getPredictionsByFile(req.params.fileId);
+        res.json(predictions);
+    } catch (error) {
+        console.error('Error getting predictions for file:', error);
+        res.status(500).json({ error: 'Failed to get predictions for file' });
+    }
+});
+
+app.get('/api/predictions/:id', (req, res) => {
+    try {
+        const prediction = db.getPrediction(parseInt(req.params.id));
+        if (!prediction) {
+            return res.status(404).json({ error: 'Prediction not found' });
+        }
+        res.json(prediction);
+    } catch (error) {
+        console.error('Error getting prediction:', error);
+        res.status(500).json({ error: 'Failed to get prediction' });
+    }
+});
+
+app.post('/api/predictions', (req, res) => {
+    try {
+        const prediction: PredictionResult = req.body;
+        
+        // Basic validation
+        if (!prediction || !prediction.fileId || !prediction.tradeSetup) {
+            return res.status(400).json({ error: 'Invalid prediction data: missing required fields' });
+        }
+        
+        const id = db.insertPrediction(prediction);
+        res.status(201).json({ message: 'Prediction saved successfully', id });
+    } catch (error) {
+        console.error('Error saving prediction:', error);
+        res.status(500).json({ error: 'Failed to save prediction' });
+    }
+});
+
+app.put('/api/predictions/:id', (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const updates: Partial<PredictionResult> = req.body;
+        
+        db.updatePrediction(id, updates);
+        res.json({ message: 'Prediction updated successfully' });
+    } catch (error) {
+        console.error('Error updating prediction:', error);
+        res.status(500).json({ error: 'Failed to update prediction' });
+    }
+});
+
+app.delete('/api/predictions/:id', (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        db.deletePrediction(id);
+        res.json({ message: 'Prediction deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting prediction:', error);
+        res.status(500).json({ error: 'Failed to delete prediction' });
+    }
+});
+
+app.delete('/api/predictions/file/:fileId', (req, res) => {
+    try {
+        db.deletePredictionsByFile(req.params.fileId);
+        res.json({ message: 'Predictions deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting predictions for file:', error);
+        res.status(500).json({ error: 'Failed to delete predictions for file' });
+    }
+});
+
+// Template endpoints
+app.get('/api/templates', (_req, res) => {
+    try {
+        const templates = db.getAllTemplates();
+        res.json(templates);
+    } catch (error) {
+        console.error('Error getting templates:', error);
+        res.status(500).json({ error: 'Failed to get templates' });
+    }
+});
+
+app.get('/api/templates/default', (_req, res) => {
+    try {
+        const template = db.getDefaultTemplate();
+        if (!template) {
+            return res.status(404).json({ error: 'Default template not found' });
+        }
+        res.json(template);
+    } catch (error) {
+        console.error('Error getting default template:', error);
+        res.status(500).json({ error: 'Failed to get default template' });
+    }
+});
+
+app.get('/api/templates/:id', (req, res) => {
+    try {
+        const template = db.getTemplate(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+        res.json(template);
+    } catch (error) {
+        console.error('Error getting template:', error);
+        res.status(500).json({ error: 'Failed to get template' });
+    }
+});
+
+app.post('/api/templates', (req, res) => {
+    try {
+        const template: TradeTemplate = req.body;
+        
+        // Basic validation
+        if (!template || !template.id || !template.name || !template.template) {
+            return res.status(400).json({ error: 'Invalid template data: missing required fields' });
+        }
+        
+        db.insertTemplate(template);
+        res.status(201).json({ message: 'Template saved successfully' });
+    } catch (error) {
+        console.error('Error saving template:', error);
+        res.status(500).json({ error: 'Failed to save template' });
+    }
+});
+
+app.put('/api/templates/:id', (req, res) => {
+    try {
+        const template: TradeTemplate = { ...req.body, id: req.params.id };
+        
+        // Basic validation
+        if (!template.name || !template.template) {
+            return res.status(400).json({ error: 'Invalid template data: missing required fields' });
+        }
+        
+        db.updateTemplate(template);
+        res.json({ message: 'Template updated successfully' });
+    } catch (error) {
+        console.error('Error updating template:', error);
+        res.status(500).json({ error: 'Failed to update template' });
+    }
+});
+
+app.delete('/api/templates/:id', (req, res) => {
+    try {
+        db.deleteTemplate(req.params.id);
+        res.json({ message: 'Template deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting template:', error);
+        res.status(500).json({ error: 'Failed to delete template' });
     }
 });
 

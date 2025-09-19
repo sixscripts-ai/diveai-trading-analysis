@@ -1,4 +1,4 @@
-import type { UploadedFile, ChatMessage, AnalysisResult } from '../types';
+import type { UploadedFile, ChatMessage, AnalysisResult, PredictionResult, TradeTemplate } from '../types';
 
 const API_BASE = '/api';
 
@@ -229,6 +229,99 @@ class DatabaseClient {
             console.error('Migration from localStorage failed:', error);
             throw error;
         }
+    }
+
+    // Prediction operations
+    async getAllPredictions(): Promise<PredictionResult[]> {
+        return this.request('/predictions');
+    }
+
+    async getPredictionsByFile(fileId: string): Promise<PredictionResult[]> {
+        return this.request(`/predictions/file/${fileId}`);
+    }
+
+    async getPrediction(id: number): Promise<PredictionResult | null> {
+        try {
+            return await this.request(`/predictions/${id}`);
+        } catch (error) {
+            if (error instanceof Error && error.message.includes('404')) {
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    async savePrediction(prediction: PredictionResult): Promise<{ id: number }> {
+        return this.request('/predictions', {
+            method: 'POST',
+            body: JSON.stringify(prediction),
+        });
+    }
+
+    async updatePrediction(id: number, prediction: Partial<PredictionResult>): Promise<void> {
+        await this.request(`/predictions/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(prediction),
+        });
+    }
+
+    async deletePrediction(id: number): Promise<void> {
+        await this.request(`/predictions/${id}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async deletePredictionsByFile(fileId: string): Promise<void> {
+        await this.request(`/predictions/file/${fileId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    // Template operations
+    async getAllTemplates(): Promise<TradeTemplate[]> {
+        return this.request('/templates');
+    }
+
+    async getTemplate(id: string): Promise<TradeTemplate | null> {
+        try {
+            return await this.request(`/templates/${id}`);
+        } catch (error: any) {
+            if (error.message?.includes('404')) {
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    async getDefaultTemplate(): Promise<TradeTemplate | null> {
+        try {
+            return await this.request('/templates/default');
+        } catch (error: any) {
+            if (error.message?.includes('404')) {
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    async saveTemplate(template: TradeTemplate): Promise<void> {
+        await this.request('/templates', {
+            method: 'POST',
+            body: JSON.stringify(template),
+        });
+    }
+
+    async updateTemplate(template: TradeTemplate): Promise<void> {
+        await this.request(`/templates/${template.id}`, {
+            method: 'PUT',
+            body: JSON.stringify(template),
+        });
+    }
+
+    async deleteTemplate(id: string): Promise<void> {
+        await this.request(`/templates/${id}`, {
+            method: 'DELETE',
+        });
     }
 }
 
