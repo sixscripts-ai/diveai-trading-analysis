@@ -1,5 +1,5 @@
 -- DeepDive AI Trading Analysis Database Schema
--- SQLite Database for storing uploaded files, analysis results, and chat history
+-- Postgres-compatible schema for storing uploaded files, analysis results, and chat history
 
 -- Files table: stores uploaded trading data files
 CREATE TABLE IF NOT EXISTS files (
@@ -7,43 +7,43 @@ CREATE TABLE IF NOT EXISTS files (
     name TEXT NOT NULL,
     type TEXT NOT NULL,
     content TEXT NOT NULL,
-    is_binary BOOLEAN NOT NULL DEFAULT 0,
+    is_binary BOOLEAN NOT NULL DEFAULT false,
     file_size INTEGER,
-    upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Analysis results table: stores AI-generated analysis reports
 CREATE TABLE IF NOT EXISTS analysis_results (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     file_id TEXT NOT NULL,
     markdown_report TEXT NOT NULL,
     chart_data TEXT, -- JSON string containing chart data
     suggested_questions TEXT, -- JSON array of suggested questions
-    analysis_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    analysis_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     processing_time_ms INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
 );
 
 -- Chat messages table: stores conversation history for each file
 CREATE TABLE IF NOT EXISTS chat_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     file_id TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'model')),
     message_text TEXT NOT NULL,
     message_order INTEGER NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
 );
 
 -- Predictions table: stores AI-generated trading predictions
 CREATE TABLE IF NOT EXISTS predictions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     file_id TEXT NOT NULL,
     trade_setup TEXT NOT NULL, -- JSON string containing trade setup details
     success_probability REAL NOT NULL, -- 0-1 probability of success
@@ -53,9 +53,9 @@ CREATE TABLE IF NOT EXISTS predictions (
     confidence_score REAL NOT NULL, -- 0-1 confidence in prediction
     reasoning TEXT, -- AI reasoning for the prediction
     market_conditions TEXT, -- JSON string with market context
-    prediction_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    prediction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
 );
 
@@ -65,9 +65,9 @@ CREATE TABLE IF NOT EXISTS templates (
     name TEXT NOT NULL,
     description TEXT,
     template_data TEXT NOT NULL, -- JSON string containing TradeSetup template
-    is_default BOOLEAN NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Indexes for better query performance
