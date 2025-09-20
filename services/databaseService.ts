@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { Pool } from 'pg';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { UploadedFile, ChatMessage, AnalysisResult, PredictionResult, TradeTemplate } from '../types';
@@ -32,16 +32,13 @@ export interface DatabaseChatMessage extends ChatMessage {
 }
 
 class DatabaseService {
-    private db: Database.Database;
+    private db: Pool;
     private static instance: DatabaseService;
 
     private constructor() {
-        // Create database in the project root
-        const dbPath = join(process.cwd(), 'deepdive.db');
-        this.db = new Database(dbPath);
-        
-        // Enable foreign keys
-        this.db.pragma('foreign_keys = ON');
+        this.db = new Pool({
+            connectionString: process.env.DATABASE_URL,
+        });
         
         // Initialize database schema
         this.initializeDatabase();
@@ -54,125 +51,128 @@ class DatabaseService {
         return DatabaseService.instance;
     }
 
-    private initializeDatabase(): void {
+    private async initializeDatabase(): Promise<void> {
         try {
             // Read and execute schema
             const schemaPath = join(process.cwd(), 'database', 'schema.sql');
             const schema = readFileSync(schemaPath, 'utf-8');
-            this.db.exec(schema);
+            // We need to modify the schema for postgres. This is a temporary solution.
+            const postgresSchema = schema
+                .replace(/AUTOINCREMENT/g, '')
+                .replace(/INTEGER PRIMARY KEY/g, 'SERIAL PRIMARY KEY')
+                .replace(/DATETIME DEFAULT CURRENT_TIMESTAMP/g, 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+                .replace(/ON DELETE CASCADE/g, 'ON DELETE CASCADE')
+                // SQLite specific triggers are not needed
+                .replace(/CREATE TRIGGER[\s\S]*?END;/g, '');
+
+
+            await this.db.query(postgresSchema);
             console.log('Database initialized successfully');
         } catch (error) {
             console.error('Failed to initialize database:', error);
-            throw error;
+            // Don't throw error if table already exists
+            if ((error as any).code !== '42P07') {
+                throw error;
+            }
         }
     }
 
     // File operations
-    public insertFile(file: UploadedFile): void {
-        const stmt = this.db.prepare(`
+    public async insertFile(file: UploadedFile): Promise<void> {
+        const query = `
             INSERT INTO files (id, name, type, content, is_binary, file_size)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
+            VALUES ($1, $2, $3, $4, $5, $6)
+        `;
         
-        const fileSize = new Blob([file.content]).size;
-        stmt.run(file.id, file.name, file.type, file.content, file.isBinary ? 1 : 0, fileSize);
+        const fileSize = Buffer.from(file.content).length;
+        await this.db.query(query, [file.id, file.name, file.type, file.content, file.isBinary, fileSize]);
     }
 
-    public getFile(id: string): DatabaseFile | null {
-        const stmt = this.db.prepare(`
-            SELECT id, name, type, content, is_binary as isBinary, file_size as fileSize,
-                   upload_date as uploadDate, last_accessed as lastAccessed,
-                   created_at as createdAt, updated_at as updatedAt
-            FROM files WHERE id = ?
-        `);
+    public async getFile(id: string): Promise<DatabaseFile | null> {
+        const query = `
+            SELECT id, name, type, content, is_binary as "isBinary", file_size as "fileSize",
+                   upload_date as "uploadDate", last_accessed as "lastAccessed",
+                   created_at as "createdAt", updated_at as "updatedAt"
+            FROM files WHERE id = $1
+        `;
         
-        const result = stmt.get(id) as any;
-        if (!result) return null;
+        const result = await this.db.query(query, [id]);
+        if (result.rows.length === 0) return null;
         
-        return {
-            ...result,
-            isBinary: Boolean(result.isBinary)
-        };
+        return result.rows[0];
     }
 
-    public getAllFiles(): DatabaseFile[] {
-        const stmt = this.db.prepare(`
-            SELECT id, name, type, content, is_binary as isBinary, file_size as fileSize,
-                   upload_date as uploadDate, last_accessed as lastAccessed,
-                   created_at as createdAt, updated_at as updatedAt
+    public async getAllFiles(): Promise<DatabaseFile[]> {
+        const query = `
+            SELECT id, name, type, content, is_binary as "isBinary", file_size as "fileSize",
+                   upload_date as "uploadDate", last_accessed as "lastAccessed",
+                   created_at as "createdAt", updated_at as "updatedAt"
             FROM files ORDER BY upload_date DESC
-        `);
+        `;
         
-        const results = stmt.all() as any[];
-        return results.map(result => ({
-            ...result,
-            isBinary: Boolean(result.isBinary)
-        }));
+        const result = await this.db.query(query);
+        return result.rows;
     }
 
-    public deleteFile(id: string): void {
-        const stmt = this.db.prepare('DELETE FROM files WHERE id = ?');
-        stmt.run(id);
+    public async deleteFile(id: string): Promise<void> {
+        await this.db.query('DELETE FROM files WHERE id = $1', [id]);
     }
 
-    public updateFileLastAccessed(id: string): void {
-        const stmt = this.db.prepare('UPDATE files SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?');
-        stmt.run(id);
+    public async updateFileLastAccessed(id: string): Promise<void> {
+        await this.db.query('UPDATE files SET last_accessed = CURRENT_TIMESTAMP WHERE id = $1', [id]);
     }
 
     // Analysis results operations
-    public insertAnalysisResult(fileId: string, result: AnalysisResult, processingTimeMs?: number): number {
-        const stmt = this.db.prepare(`
+    public async insertAnalysisResult(fileId: string, result: AnalysisResult, processingTimeMs?: number): Promise<number> {
+        const query = `
             INSERT INTO analysis_results (file_id, markdown_report, chart_data, suggested_questions, processing_time_ms)
-            VALUES (?, ?, ?, ?, ?)
-        `);
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+        `;
         
-        const info = stmt.run(
+        const res = await this.db.query(query, [
             fileId,
             result.markdownReport,
             result.chartData ? JSON.stringify(result.chartData) : null,
             JSON.stringify(result.suggestedQuestions),
             processingTimeMs
-        );
+        ]);
         
-        return info.lastInsertRowid as number;
+        return res.rows[0].id;
     }
 
-    public getAnalysisResult(fileId: string): DatabaseAnalysisResult | null {
-        const stmt = this.db.prepare(`
-            SELECT id, file_id as fileId, markdown_report as markdownReport,
-                   chart_data as chartData, suggested_questions as suggestedQuestions,
-                   analysis_date as analysisDate, processing_time_ms as processingTimeMs,
-                   created_at as createdAt, updated_at as updatedAt
-            FROM analysis_results WHERE file_id = ? ORDER BY analysis_date DESC LIMIT 1
-        `);
+    public async getAnalysisResult(fileId: string): Promise<DatabaseAnalysisResult | null> {
+        const query = `
+            SELECT id, file_id as "fileId", markdown_report as "markdownReport",
+                   chart_data as "chartData", suggested_questions as "suggestedQuestions",
+                   analysis_date as "analysisDate", processing_time_ms as "processingTimeMs",
+                   created_at as "createdAt", updated_at as "updatedAt"
+            FROM analysis_results WHERE file_id = $1 ORDER BY analysis_date DESC LIMIT 1
+        `;
         
-        const result = stmt.get(fileId) as any;
-        if (!result) return null;
+        const result = await this.db.query(query, [fileId]);
+        if (result.rows.length === 0) return null;
         
+        const row = result.rows[0];
         return {
-            ...result,
-            chartData: result.chartData ? JSON.parse(result.chartData) : null,
-            suggestedQuestions: JSON.parse(result.suggestedQuestions)
+            ...row,
+            chartData: row.chartData ? JSON.parse(row.chartData) : null,
+            suggestedQuestions: JSON.parse(row.suggestedQuestions)
         };
     }
 
-    public getAllAnalysisResults(): Record<string, AnalysisResult> {
-        const stmt = this.db.prepare(`
-            SELECT DISTINCT file_id as fileId, markdown_report as markdownReport,
-                   chart_data as chartData, suggested_questions as suggestedQuestions
+    public async getAllAnalysisResults(): Promise<Record<string, AnalysisResult>> {
+        const query = `
+            SELECT DISTINCT ON (file_id) file_id as "fileId", markdown_report as "markdownReport",
+                   chart_data as "chartData", suggested_questions as "suggestedQuestions"
             FROM analysis_results 
-            WHERE (file_id, analysis_date) IN (
-                SELECT file_id, MAX(analysis_date) 
-                FROM analysis_results 
-                GROUP BY file_id
-            )
-        `);
+            ORDER BY file_id, analysis_date DESC
+        `;
         
-        const results = stmt.all() as any[];
+        const results = await this.db.query(query);
         const analysisResults: Record<string, AnalysisResult> = {};
         
-        results.forEach(result => {
+        results.rows.forEach(result => {
             analysisResults[result.fileId] = {
                 markdownReport: result.markdownReport,
                 chartData: result.chartData ? JSON.parse(result.chartData) : null,
@@ -183,44 +183,45 @@ class DatabaseService {
         return analysisResults;
     }
 
-    public deleteAnalysisResults(fileId: string): void {
-        const stmt = this.db.prepare('DELETE FROM analysis_results WHERE file_id = ?');
-        stmt.run(fileId);
+    public async deleteAnalysisResults(fileId: string): Promise<void> {
+        await this.db.query('DELETE FROM analysis_results WHERE file_id = $1', [fileId]);
     }
 
     // Chat messages operations
-    public insertChatMessage(fileId: string, message: ChatMessage, order: number): number {
-        const stmt = this.db.prepare(`
+    public async insertChatMessage(fileId: string, message: ChatMessage, order: number): Promise<number> {
+        const query = `
             INSERT INTO chat_messages (file_id, role, message_text, message_order)
-            VALUES (?, ?, ?, ?)
-        `);
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+        `;
         
-        const info = stmt.run(fileId, message.role, message.text, order);
-        return info.lastInsertRowid as number;
+        const res = await this.db.query(query, [fileId, message.role, message.text, order]);
+        return res.rows[0].id;
     }
 
-    public getChatHistory(fileId: string): ChatMessage[] {
-        const stmt = this.db.prepare(`
+    public async getChatHistory(fileId: string): Promise<ChatMessage[]> {
+        const query = `
             SELECT role, message_text as text
             FROM chat_messages 
-            WHERE file_id = ? 
+            WHERE file_id = $1 
             ORDER BY message_order ASC
-        `);
+        `;
         
-        return stmt.all(fileId) as ChatMessage[];
+        const result = await this.db.query(query, [fileId]);
+        return result.rows;
     }
 
-    public getAllChatHistory(): Record<string, ChatMessage[]> {
-        const stmt = this.db.prepare(`
-            SELECT file_id as fileId, role, message_text as text
+    public async getAllChatHistory(): Promise<Record<string, ChatMessage[]>> {
+        const query = `
+            SELECT file_id as "fileId", role, message_text as text
             FROM chat_messages 
             ORDER BY file_id, message_order ASC
-        `);
+        `;
         
-        const results = stmt.all() as any[];
+        const results = await this.db.query(query);
         const chatHistory: Record<string, ChatMessage[]> = {};
         
-        results.forEach(result => {
+        results.rows.forEach(result => {
             if (!chatHistory[result.fileId]) {
                 chatHistory[result.fileId] = [];
             }
@@ -233,38 +234,35 @@ class DatabaseService {
         return chatHistory;
     }
 
-    public setChatHistory(fileId: string, messages: ChatMessage[]): void {
-        // Delete existing messages for this file
-        const deleteStmt = this.db.prepare('DELETE FROM chat_messages WHERE file_id = ?');
-        deleteStmt.run(fileId);
+    public async setChatHistory(fileId: string, messages: ChatMessage[]): Promise<void> {
+        await this.db.query('DELETE FROM chat_messages WHERE file_id = $1', [fileId]);
         
-        // Insert new messages
-        const insertStmt = this.db.prepare(`
+        const query = `
             INSERT INTO chat_messages (file_id, role, message_text, message_order)
-            VALUES (?, ?, ?, ?)
-        `);
+            VALUES ($1, $2, $3, $4)
+        `;
         
-        messages.forEach((message, index) => {
-            insertStmt.run(fileId, message.role, message.text, index);
-        });
+        for (let i = 0; i < messages.length; i++) {
+            await this.db.query(query, [fileId, messages[i].role, messages[i].text, i]);
+        }
     }
 
-    public deleteChatHistory(fileId: string): void {
-        const stmt = this.db.prepare('DELETE FROM chat_messages WHERE file_id = ?');
-        stmt.run(fileId);
+    public async deleteChatHistory(fileId: string): Promise<void> {
+        await this.db.query('DELETE FROM chat_messages WHERE file_id = $1', [fileId]);
     }
 
     // Prediction operations
-    public insertPrediction(prediction: PredictionResult): number {
-        const stmt = this.db.prepare(`
+    public async insertPrediction(prediction: PredictionResult): Promise<number> {
+        const query = `
             INSERT INTO predictions (
                 file_id, trade_setup, success_probability, risk_level, 
                 expected_return, suggested_position_size, confidence_score, 
                 reasoning, market_conditions
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id
+        `;
         
-        const result = stmt.run(
+        const res = await this.db.query(query, [
             prediction.fileId,
             JSON.stringify(prediction.tradeSetup),
             prediction.successProbability,
@@ -274,259 +272,258 @@ class DatabaseService {
             prediction.confidenceScore,
             prediction.reasoning,
             prediction.marketConditions ? JSON.stringify(prediction.marketConditions) : null
-        );
+        ]);
         
-        return result.lastInsertRowid as number;
+        return res.rows[0].id;
     }
 
-    public getPrediction(id: number): PredictionResult | null {
-        const stmt = this.db.prepare(`
-            SELECT * FROM predictions WHERE id = ?
-        `);
+    public async getPrediction(id: number): Promise<PredictionResult | null> {
+        const query = `
+            SELECT 
+                id,
+                file_id as "fileId",
+                trade_setup as "tradeSetup",
+                success_probability as "successProbability",
+                risk_level as "riskLevel",
+                expected_return as "expectedReturn",
+                suggested_position_size as "suggestedPositionSize",
+                confidence_score as "confidenceScore",
+                reasoning,
+                market_conditions as "marketConditions",
+                prediction_date as "predictionDate"
+            FROM predictions WHERE id = $1
+        `;
         
-        const row = stmt.get(id) as any;
-        if (!row) return null;
-        
+        const result = await this.db.query(query, [id]);
+        if (result.rows.length === 0) return null;
+
+        const row = result.rows[0];
         return {
-            id: row.id,
-            fileId: row.file_id,
-            tradeSetup: JSON.parse(row.trade_setup),
-            successProbability: row.success_probability,
-            riskLevel: row.risk_level,
-            expectedReturn: row.expected_return,
-            suggestedPositionSize: row.suggested_position_size,
-            confidenceScore: row.confidence_score,
-            reasoning: row.reasoning,
-            marketConditions: row.market_conditions ? JSON.parse(row.market_conditions) : null,
-            predictionDate: row.prediction_date
+            ...row,
+            tradeSetup: JSON.parse(row.tradeSetup),
+            marketConditions: row.marketConditions ? JSON.parse(row.marketConditions) : null,
         };
     }
 
-    public getAllPredictions(): PredictionResult[] {
-        const stmt = this.db.prepare(`
-            SELECT * FROM predictions ORDER BY prediction_date DESC
-        `);
+    public async getAllPredictions(): Promise<PredictionResult[]> {
+        const query = `
+            SELECT 
+                id,
+                file_id as "fileId",
+                trade_setup as "tradeSetup",
+                success_probability as "successProbability",
+                risk_level as "riskLevel",
+                expected_return as "expectedReturn",
+                suggested_position_size as "suggestedPositionSize",
+                confidence_score as "confidenceScore",
+                reasoning,
+                market_conditions as "marketConditions",
+                prediction_date as "predictionDate"
+            FROM predictions ORDER BY prediction_date DESC
+        `;
         
-        const rows = stmt.all() as any[];
-        return rows.map(row => ({
-            id: row.id,
-            fileId: row.file_id,
-            tradeSetup: JSON.parse(row.trade_setup),
-            successProbability: row.success_probability,
-            riskLevel: row.risk_level,
-            expectedReturn: row.expected_return,
-            suggestedPositionSize: row.suggested_position_size,
-            confidenceScore: row.confidence_score,
-            reasoning: row.reasoning,
-            marketConditions: row.market_conditions ? JSON.parse(row.market_conditions) : null,
-            predictionDate: row.prediction_date
+        const result = await this.db.query(query);
+        return result.rows.map(row => ({
+            ...row,
+            tradeSetup: JSON.parse(row.tradeSetup),
+            marketConditions: row.marketConditions ? JSON.parse(row.marketConditions) : null,
         }));
     }
 
-    public getPredictionsByFile(fileId: string): PredictionResult[] {
-        const stmt = this.db.prepare(`
-            SELECT * FROM predictions WHERE file_id = ? ORDER BY prediction_date DESC
-        `);
+    public async getPredictionsByFile(fileId: string): Promise<PredictionResult[]> {
+        const query = `
+            SELECT 
+                id,
+                file_id as "fileId",
+                trade_setup as "tradeSetup",
+                success_probability as "successProbability",
+                risk_level as "riskLevel",
+                expected_return as "expectedReturn",
+                suggested_position_size as "suggestedPositionSize",
+                confidence_score as "confidenceScore",
+                reasoning,
+                market_conditions as "marketConditions",
+                prediction_date as "predictionDate"
+            FROM predictions WHERE file_id = $1 ORDER BY prediction_date DESC
+        `;
         
-        const rows = stmt.all(fileId) as any[];
-        return rows.map(row => ({
-            id: row.id,
-            fileId: row.file_id,
-            tradeSetup: JSON.parse(row.trade_setup),
-            successProbability: row.success_probability,
-            riskLevel: row.risk_level,
-            expectedReturn: row.expected_return,
-            suggestedPositionSize: row.suggested_position_size,
-            confidenceScore: row.confidence_score,
-            reasoning: row.reasoning,
-            marketConditions: row.market_conditions ? JSON.parse(row.market_conditions) : null,
-            predictionDate: row.prediction_date
+        const result = await this.db.query(query, [fileId]);
+        return result.rows.map(row => ({
+            ...row,
+            tradeSetup: JSON.parse(row.tradeSetup),
+            marketConditions: row.marketConditions ? JSON.parse(row.marketConditions) : null,
         }));
     }
 
-    public updatePrediction(id: number, updates: Partial<PredictionResult>): void {
-        const fields = [];
-        const values = [];
+    public async updatePrediction(id: number, updates: Partial<PredictionResult>): Promise<void> {
+        const fields: string[] = [];
+        const values: any[] = [];
+        let placeholderCount = 1;
         
         if (updates.tradeSetup !== undefined) {
-            fields.push('trade_setup = ?');
+            fields.push(`trade_setup = $${placeholderCount++}`);
             values.push(JSON.stringify(updates.tradeSetup));
         }
         if (updates.successProbability !== undefined) {
-            fields.push('success_probability = ?');
+            fields.push(`success_probability = $${placeholderCount++}`);
             values.push(updates.successProbability);
         }
         if (updates.riskLevel !== undefined) {
-            fields.push('risk_level = ?');
+            fields.push(`risk_level = $${placeholderCount++}`);
             values.push(updates.riskLevel);
         }
         if (updates.expectedReturn !== undefined) {
-            fields.push('expected_return = ?');
+            fields.push(`expected_return = $${placeholderCount++}`);
             values.push(updates.expectedReturn);
         }
         if (updates.suggestedPositionSize !== undefined) {
-            fields.push('suggested_position_size = ?');
+            fields.push(`suggested_position_size = $${placeholderCount++}`);
             values.push(updates.suggestedPositionSize);
         }
         if (updates.confidenceScore !== undefined) {
-            fields.push('confidence_score = ?');
+            fields.push(`confidence_score = $${placeholderCount++}`);
             values.push(updates.confidenceScore);
         }
         if (updates.reasoning !== undefined) {
-            fields.push('reasoning = ?');
+            fields.push(`reasoning = $${placeholderCount++}`);
             values.push(updates.reasoning);
         }
         if (updates.marketConditions !== undefined) {
-            fields.push('market_conditions = ?');
+            fields.push(`market_conditions = $${placeholderCount++}`);
             values.push(updates.marketConditions ? JSON.stringify(updates.marketConditions) : null);
         }
         
         if (fields.length === 0) return;
         
         values.push(id);
-        const stmt = this.db.prepare(`UPDATE predictions SET ${fields.join(', ')} WHERE id = ?`);
-        stmt.run(...values);
+        const query = `UPDATE predictions SET ${fields.join(', ')} WHERE id = $${placeholderCount}`;
+        await this.db.query(query, values);
     }
 
-    public deletePrediction(id: number): void {
-        const stmt = this.db.prepare('DELETE FROM predictions WHERE id = ?');
-        stmt.run(id);
+    public async deletePrediction(id: number): Promise<void> {
+        await this.db.query('DELETE FROM predictions WHERE id = $1', [id]);
     }
 
-    public deletePredictionsByFile(fileId: string): void {
-        const stmt = this.db.prepare('DELETE FROM predictions WHERE file_id = ?');
-        stmt.run(fileId);
+    public async deletePredictionsByFile(fileId: string): Promise<void> {
+        await this.db.query('DELETE FROM predictions WHERE file_id = $1', [fileId]);
     }
 
-    // Utility operations
-    public getStats(): { totalFiles: number; totalAnalyses: number; totalMessages: number; dbSize: string } {
-        const filesCount = this.db.prepare('SELECT COUNT(*) as count FROM files').get() as any;
-        const analysesCount = this.db.prepare('SELECT COUNT(*) as count FROM analysis_results').get() as any;
-        const messagesCount = this.db.prepare('SELECT COUNT(*) as count FROM chat_messages').get() as any;
-        
-        // Get database file size
-        const dbPath = join(process.cwd(), 'deepdive.db');
-        let dbSize = '0 KB';
-        try {
-            const fs = require('fs');
-            const stats = fs.statSync(dbPath);
-            const sizeInBytes = stats.size;
-            dbSize = sizeInBytes < 1024 ? `${sizeInBytes} B` :
-                     sizeInBytes < 1024 * 1024 ? `${(sizeInBytes / 1024).toFixed(1)} KB` :
-                     `${(sizeInBytes / (1024 * 1024)).toFixed(1)} MB`;
-        } catch (error) {
-            console.warn('Could not get database size:', error);
-        }
-        
-        return {
-            totalFiles: filesCount.count,
-            totalAnalyses: analysesCount.count,
-            totalMessages: messagesCount.count,
-            dbSize
-        };
-    }
-
-    public backup(backupPath: string): void {
-        this.db.backup(backupPath);
-    }
-
-    // Template management methods
-    public insertTemplate(template: TradeTemplate): void {
-        const stmt = this.db.prepare(`
-            INSERT OR REPLACE INTO templates (id, name, description, template_data, is_default, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-        
-        stmt.run(
+    // Template operations
+    public async insertTemplate(template: TradeTemplate): Promise<string> {
+        const query = `
+            INSERT INTO templates (id, name, description, template_data, is_default)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+        `;
+        const res = await this.db.query(query, [
             template.id,
             template.name,
             template.description,
             JSON.stringify(template.template),
-            template.isDefault ? 1 : 0,
-            template.createdAt,
-            template.updatedAt
-        );
+            template.isDefault
+        ]);
+        return res.rows[0].id;
     }
 
-    public getTemplate(id: string): TradeTemplate | null {
-        const stmt = this.db.prepare(`
-            SELECT * FROM templates WHERE id = ?
-        `);
-        
-        const row = stmt.get(id) as any;
-        if (!row) return null;
-
+    public async getTemplate(id: string): Promise<TradeTemplate | null> {
+        const query = `SELECT id, name, description, template_data as "template", is_default as "isDefault", created_at as "createdAt", updated_at as "updatedAt" FROM templates WHERE id = $1`;
+        const result = await this.db.query(query, [id]);
+        if (result.rows.length === 0) return null;
+        const row = result.rows[0];
         return {
-            id: row.id,
-            name: row.name,
-            description: row.description,
-            template: JSON.parse(row.template_data),
-            isDefault: Boolean(row.is_default),
-            createdAt: row.created_at,
-            updatedAt: row.updated_at
+            ...row,
+            template: JSON.parse(row.template)
         };
     }
 
-    public getAllTemplates(): TradeTemplate[] {
-        const stmt = this.db.prepare(`
-            SELECT * FROM templates ORDER BY is_default DESC, name ASC
-        `);
-        
-        const rows = stmt.all() as any[];
-        return rows.map(row => ({
-            id: row.id,
-            name: row.name,
-            description: row.description,
-            template: JSON.parse(row.template_data),
-            isDefault: Boolean(row.is_default),
-            createdAt: row.created_at,
-            updatedAt: row.updated_at
+    public async getAllTemplates(): Promise<TradeTemplate[]> {
+        const query = `SELECT id, name, description, template_data as "template", is_default as "isDefault", created_at as "createdAt", updated_at as "updatedAt" FROM templates ORDER BY created_at`;
+        const result = await this.db.query(query);
+        return result.rows.map(row => ({
+            ...row,
+            template: JSON.parse(row.template)
         }));
     }
 
-    public getDefaultTemplate(): TradeTemplate | null {
-        const stmt = this.db.prepare(`
-            SELECT * FROM templates WHERE is_default = 1 LIMIT 1
-        `);
-        
-        const row = stmt.get() as any;
-        if (!row) return null;
-
+    public async getDefaultTemplate(): Promise<TradeTemplate | null> {
+        const query = `SELECT id, name, description, template_data as "template", is_default as "isDefault", created_at as "createdAt", updated_at as "updatedAt" FROM templates WHERE is_default = true LIMIT 1`;
+        const result = await this.db.query(query);
+        if (result.rows.length === 0) return null;
+        const row = result.rows[0];
         return {
-            id: row.id,
-            name: row.name,
-            description: row.description,
-            template: JSON.parse(row.template_data),
-            isDefault: Boolean(row.is_default),
-            createdAt: row.created_at,
-            updatedAt: row.updated_at
+            ...row,
+            template: JSON.parse(row.template)
         };
     }
 
-    public updateTemplate(template: TradeTemplate): void {
-        const stmt = this.db.prepare(`
-            UPDATE templates 
-            SET name = ?, description = ?, template_data = ?, is_default = ?, updated_at = ?
-            WHERE id = ?
-        `);
-        
-        stmt.run(
-            template.name,
-            template.description,
-            JSON.stringify(template.template),
-            template.isDefault ? 1 : 0,
-            new Date().toISOString(),
-            template.id
-        );
+    public async setDefaultTemplate(id: string): Promise<void> {
+        await this.db.query('UPDATE templates SET is_default = false');
+        await this.db.query('UPDATE templates SET is_default = true WHERE id = $1', [id]);
     }
 
-    public deleteTemplate(id: string): void {
-        const stmt = this.db.prepare(`DELETE FROM templates WHERE id = ? AND is_default = 0`);
-        stmt.run(id);
+    public async updateTemplate(id: string, updates: Partial<TradeTemplate>): Promise<void> {
+        const fields: string[] = [];
+        const values: any[] = [];
+        let placeholderCount = 1;
+
+        if (updates.name !== undefined) {
+            fields.push(`name = $${placeholderCount++}`);
+            values.push(updates.name);
+        }
+        if (updates.description !== undefined) {
+            fields.push(`description = $${placeholderCount++}`);
+            values.push(updates.description);
+        }
+        if (updates.template !== undefined) {
+            fields.push(`template_data = $${placeholderCount++}`);
+            values.push(JSON.stringify(updates.template));
+        }
+        if (updates.isDefault !== undefined) {
+            fields.push(`is_default = $${placeholderCount++}`);
+            values.push(updates.isDefault);
+        }
+
+        if (fields.length === 0) return;
+
+        values.push(id);
+        const query = `UPDATE templates SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${placeholderCount}`;
+        await this.db.query(query, values);
+    }
+
+    public async deleteTemplate(id: string): Promise<void> {
+        await this.db.query('DELETE FROM templates WHERE id = $1', [id]);
+    }
+
+    // Stats and maintenance
+    public async getStats(): Promise<any> {
+        const queries = {
+            fileCount: 'SELECT COUNT(*) FROM files',
+            analysisCount: 'SELECT COUNT(*) FROM analysis_results',
+            predictionCount: 'SELECT COUNT(*) FROM predictions',
+            templateCount: 'SELECT COUNT(*) FROM templates',
+            totalSize: 'SELECT SUM(file_size) FROM files'
+        };
+
+        const results = await Promise.all(Object.values(queries).map(q => this.db.query(q)));
+        
+        return {
+            fileCount: parseInt(results[0].rows[0].count, 10),
+            analysisCount: parseInt(results[1].rows[0].count, 10),
+            predictionCount: parseInt(results[2].rows[0].count, 10),
+            templateCount: parseInt(results[3].rows[0].count, 10),
+            totalSize: parseInt(results[4].rows[0].sum, 10) || 0
+        };
+    }
+
+    public async backup(filePath: string): Promise<void> {
+        // This is more complex with remote postgres.
+        // For now, we will skip implementing this for postgres.
+        console.warn('Backup function is not implemented for PostgreSQL driver.');
+        return;
     }
 
     public close(): void {
-        this.db.close();
+        this.db.end();
     }
 }
 
