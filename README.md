@@ -1,76 +1,34 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 🧠 DiveAI | Autonomous Trading Analyst
 
-# Run and deploy your AI Studio app
+[![Live Demo](https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge)](https://diveai-trading-analysis.vercel.app/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 
-This contains everything you need to run your app locally.
+**DiveAI** is an intelligent trading journal that uses **LLM Agents** to analyze trading behavior, detect psychological pitfalls, and generate actionable strategy improvements.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1JmMDP5ACGBv0HyY90ZlqgwaYrY9qRspF
+---
 
-## Run Locally
+### 📸 Dashboard
+![DiveAI Dashboard](DiveAI_Dashboard.png)
 
-**Prerequisites:**  Node.js
+### 🤖 How It Works
+1.  **Ingestion:** Users upload CSV trading logs (NinjaTrader, MetaTrader, etc.).
+2.  **Analysis:** The system normalizes data and feeds it into a specialized **Google Gemini AI Agent**.
+3.  **Insight Generation:** The AI identifies patterns (e.g., "Revenge Trading on Mondays") and provides a "Brutally Honest" performance review.
 
-### Quick Start
+### 🛠️ Tech Stack
+- **AI Engine:** Google Gemini API (via AI Studio)
+- **Core:** TypeScript, React, Node.js v20
+- **Infrastructure:** Docker Containerization & Nginx Reverse Proxy
+- **Resilience:** PostgreSQL with connection pooling and fallback modes.
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+---
 
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+### 🐳 Deployment
+\`\`\`bash
+# Build the container
+docker-compose build
 
-3. Run the app with database:
-   ```bash
-   npm run dev:full
-   ```
-   Or use the startup script:
-   ```bash
-   ./start.sh
-   ```
-
-### Manual Setup
-
-If you prefer to run services separately:
-
-1. Start the database server:
-   ```bash
-   npm run db:server
-   ```
-
-2. In another terminal, start the frontend:
-   ```bash
-   npm run dev
-   ```
-
-## Database
-
-This application uses **SQLite** for data persistence:
-
-- **Database file**: `deepdive.db` (created automatically)
-- **Location**: Project root directory
-- **Features**:
-  - Persistent file storage
-  - Analysis results caching
-  - Chat history preservation
-  - Automatic migration from localStorage
-  - Database backup functionality
-
-### Database API
-
-The database server runs on `http://localhost:3001` with the following endpoints:
-
-- `GET /api/health` - Health check
-- `GET /api/stats` - Database statistics
-- `GET /api/files` - Get all uploaded files
-- `POST /api/files` - Upload new file
-- `GET /api/analysis/:fileId` - Get analysis results
-- `POST /api/analysis` - Save analysis results
-- `GET /api/chat/:fileId` - Get chat history
-- `POST /api/chat/:fileId` - Update chat history
-- `POST /api/backup` - Create database backup
-
-### Fallback Mode
-
-If the database server is unavailable, the application automatically falls back to localStorage for data persistence.
+# Run the stack
+docker-compose up -d
+\`\`\`

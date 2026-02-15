@@ -377,8 +377,8 @@ app.use((error: any, _req: express.Request, res: express.Response, _next: expres
 });
 
 // Start server
-app.listen(PORT, () => {
-    console.log(`Database API server running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Database API server running on http://0.0.0.0:${PORT}`);
     console.log('Available endpoints:');
     console.log('  GET  /api/health - Health check');
     console.log('  GET  /api/stats - Database statistics');
